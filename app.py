@@ -2,62 +2,38 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.chains import RetrievalQA
 from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import SimpleJSONLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_community.document_loaders import JSONLoader
+from langchain.chains import RetrievalQA
 
-# Load environment variables (API keys)
+# Load environment variables
 load_dotenv()
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-st.set_page_config(page_title="RAG Report Finder", layout="centered")
-st.title("📄 RAG-based Report Finder using Gemini")
+# Setup LLM and Embeddings
+llm = ChatGoogleGenerativeAI(model="gemini-pro", google_api_key=GOOGLE_API_KEY)
+embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
 
-@st.cache_resource(show_spinner="🔄 Loading vector store...")
-def build_retriever():
-    all_docs = []
+# Load and split documents
+loader = SimpleJSONLoader("data.json")  # Your JSON file path
+docs = loader.load()
+text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+chunks = text_splitter.split_documents(docs)
 
-    # Load JSON
-    json_path = "data/data.json"
-    if os.path.exists(json_path):
-        json_loader = JSONLoader(
-            file_path=json_path,
-            jq_schema=".[]",
-            text_content=False,
-            json_lines=False,
-        )
-        all_docs.extend(json_loader.load())
+# Create or load FAISS index
+if os.path.exists("faiss_index"):
+    db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+else:
+    db = FAISS.from_documents(chunks, embeddings)
+    db.save_local("faiss_index")
 
-    # Split text into chunks
-    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    docs = text_splitter.split_documents(all_docs)
+# Retrieval chain
+qa = RetrievalQA.from_chain_type(llm=llm, retriever=db.as_retriever())
 
-    # Create embeddings
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-
-    # Store in FAISS
-    vectorstore = FAISS.from_documents(docs, embeddings)
-    return vectorstore.as_retriever()
-
-retriever = build_retriever()
-
-# LLM setup
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0)
-
-# Chain
-qa_chain = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
-
-# User input form
-with st.form("query_form"):
-    query = st.text_area("🔍 Enter your report field query", 
-        placeholder='e.g. ["HSN Code", "Qty", "Rate", "Discount"]')
-    submitted = st.form_submit_button("Submit")
-
-if submitted and query.strip():
-    with st.spinner("💡 Getting your answer..."):
-        try:
-            answer = qa_chain.run(query)
-            st.markdown("### ✅ Gemini Answer:")
-            st.success(answer)
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
+# Streamlit UI
+st.title("RAG App with LangChain + Gemini + FAISS")
+query = st.text_input("Ask a question from the JSON document")
+if query:
+    answer = qa.run(query)
+    st.write("**Answer:**", answer)
