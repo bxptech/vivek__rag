@@ -24,7 +24,7 @@ embeddings = GoogleGenerativeAIEmbeddings(
 
 # Load and split documents from JSON
 loader = JSONLoader(
-    file_path="data.json",
+    file_path="data/data.json",
     jq_schema=".[]",        # Read each element in array
     text_content=False
 )
